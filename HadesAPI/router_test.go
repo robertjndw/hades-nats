@@ -71,11 +71,10 @@ func (suite *APISuite) SetupSuite() {
 	}
 
 	// Create producer for tests
-	producer, err := utils.NewHadesProducer(suite.natsConnection)
+	suite.hadesProducer, err = utils.NewHadesProducer(suite.natsConnection)
 	if err != nil {
 		log.Fatalf("Failed to create HadesProducer: %v", err)
 	}
-	suite.hadesProducer = &producer
 
 	// Set the global HadesProducer for tests
 	HadesProducer = suite.hadesProducer

@@ -21,6 +21,7 @@ type HadesProducer struct {
 
 type HadesConsumer struct {
 	natsConnection *nats.Conn
+	concurrency    uint
 	consumer       jetstream.Consumer
 }
 
@@ -55,12 +56,12 @@ func SetupNatsConnection(config NatsConfig) (*nats.Conn, error) {
 }
 
 // SetupNatsJetStream creates a JetStream connection for persistent message delivery
-func NewHadesProducer(nc *nats.Conn) (HadesProducer, error) {
+func NewHadesProducer(nc *nats.Conn) (*HadesProducer, error) {
 	ctx := context.Background()
 	js, err := jetstream.New(nc)
 	if err != nil {
 		slog.Error("Failed to create JetStream context", "error", err)
-		return HadesProducer{}, err
+		return nil, err
 	}
 
 	s, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
@@ -73,35 +74,36 @@ func NewHadesProducer(nc *nats.Conn) (HadesProducer, error) {
 	})
 	if err != nil {
 		slog.Error("Failed to create JetStream stream", "error", err)
-		return HadesProducer{}, err
+		return nil, err
 	}
 	slog.Info("Created JetStream stream", "stream", s)
 
-	return HadesProducer{
+	return &HadesProducer{
 		natsConnection: nc,
 		js:             js,
 	}, nil
 }
 
-func NewHadesConsumer(nc *nats.Conn) (HadesConsumer, error) {
+func NewHadesConsumer(nc *nats.Conn, concurrency uint) (*HadesConsumer, error) {
 	ctx := context.Background()
 	js, err := jetstream.New(nc)
 	if err != nil {
 		slog.Error("Failed to create JetStream context", "error", err)
-		return HadesConsumer{}, err
+		return nil, err
 	}
 	cons, err := js.CreateConsumer(ctx, "HADES_JOBS", jetstream.ConsumerConfig{
-		Durable:   "foo",
-		AckPolicy: jetstream.AckExplicitPolicy,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		FilterSubject: "hades.jobs.medium",
 	})
 	if err != nil {
 		slog.Error("Failed to create JetStream consumer", "error", err)
-		return HadesConsumer{}, err
+		return nil, err
 	}
 	slog.Info("Created JetStream consumer", "consumer", cons)
-	return HadesConsumer{
+	return &HadesConsumer{
 		natsConnection: nc,
 		consumer:       cons,
+		concurrency:    concurrency,
 	}, nil
 }
 
@@ -110,7 +112,7 @@ func (hp HadesProducer) EnqueueJob(ctx context.Context, queuePayloud payload.Que
 	if err != nil {
 		slog.Error("Failed to marshal payload", "error", err)
 	}
-	_, err = hp.js.PublishAsync("hades.jobs", bytesPayload)
+	_, err = hp.js.PublishAsync("hades.jobs.medium", bytesPayload)
 	return err
 }
 
@@ -124,7 +126,7 @@ func (hc HadesConsumer) DequeueJob(ctx context.Context, processing func(payload 
 	defer iter.Stop()
 
 	// Create a worker pool with limited concurrency
-	numWorkers := 1 // TODO make configurable
+	numWorkers := hc.concurrency
 	sem := make(chan struct{}, numWorkers)
 
 	// Create a wait group to track active workers

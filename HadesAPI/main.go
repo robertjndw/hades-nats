@@ -40,7 +40,7 @@ func main() {
 	}
 	defer NatsConnection.Close()
 
-	*HadesProducer, err = utils.NewHadesProducer(NatsConnection)
+	HadesProducer, err = utils.NewHadesProducer(NatsConnection)
 	if err != nil {
 		log.Fatalf("Failed to create HadesProducer: %v", err)
 		return
