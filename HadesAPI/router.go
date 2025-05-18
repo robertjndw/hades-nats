@@ -56,7 +56,9 @@ func AddBuildToQueue(c *gin.Context) {
 	payload.QueuePayload.ID = utils.GenerateUUID()
 	log.Debug("Received build request ", payload)
 
-	err := HadesProducer.EnqueueJob(c.Request.Context(), payload.QueuePayload)
+	queuePrio := utils.PrioFromInt(payload.Priority)
+
+	err := HadesProducer.EnqueueJobWithPriority(c.Request.Context(), payload.QueuePayload, queuePrio)
 	if err != nil {
 		log.WithError(err).Error("Failed to enqueue job")
 		c.String(http.StatusInternalServerError, "Failed to enqueue job")

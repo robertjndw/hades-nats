@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 
+	"github.com/ls1intum/hades/hadesScheduler/docker"
+	"github.com/ls1intum/hades/hadesScheduler/k8s"
 	"github.com/ls1intum/hades/shared/payload"
 	"github.com/ls1intum/hades/shared/utils"
 	"github.com/nats-io/nats.go"
@@ -51,32 +53,32 @@ func main() {
 
 	HadesConsumer, err = utils.NewHadesConsumer(NatsConnection, cfg.Concurrency)
 	if err != nil {
-		slog.Error("Failed to create Hades producer", "error", err)
+		slog.Error("Failed to create Hades consumer", "error", err)
 		os.Exit(1)
 	}
 
-	// var scheduler JobScheduler
-	// switch executorCfg.Executor {
-	// case "k8s":
-	// 	slog.Info("Started HadesScheduler in Kubernetes mode")
-	// 	scheduler = k8s.NewK8sScheduler()
-	// case "docker":
-	// 	slog.Info("Started HadesScheduler in Docker mode")
-	// 	scheduler = docker.NewDockerScheduler().SetFluentdLogging(cfg.FluentdAddr, cfg.FluentdMaxRetries)
-	// default:
-	// 	slog.Error("Invalid executor specified: ", "executor", executorCfg.Executor)
-	// 	os.Exit(1)
-	// }
+	var scheduler JobScheduler
+	switch executorCfg.Executor {
+	case "k8s":
+		slog.Info("Started HadesScheduler in Kubernetes mode")
+		scheduler = k8s.NewK8sScheduler()
+	case "docker":
+		slog.Info("Started HadesScheduler in Docker mode")
+		scheduler = docker.NewDockerScheduler().SetFluentdLogging(cfg.FluentdAddr, cfg.FluentdMaxRetries)
+	default:
+		slog.Error("Invalid executor specified: ", "executor", executorCfg.Executor)
+		os.Exit(1)
+	}
 
 	ctx := context.Background()
 	HadesConsumer.DequeueJob(ctx, func(payload payload.QueuePayload) {
 		slog.Info("Received job", "id", payload.ID.String())
 		slog.Debug("Job payload", "payload", payload)
 
-		// if err := scheduler.ScheduleJob(ctx, payload); err != nil {
-		// 	slog.Error("Failed to schedule job", "error", err, "id", payload.ID.String())
-		// 	return
-		// }
-		// slog.Info("Successfully scheduled job", "id", payload.ID.String())
+		if err := scheduler.ScheduleJob(ctx, payload); err != nil {
+			slog.Error("Failed to schedule job", "error", err, "id", payload.ID.String())
+			return
+		}
+		slog.Info("Successfully scheduled job", "id", payload.ID.String())
 	})
 }
