@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/ls1intum/hades/shared/payload"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -21,12 +22,14 @@ var priorities = []Priority{HighPriority, MediumPriority, LowPriority}
 type HadesProducer struct {
 	natsConnection *nats.Conn
 	js             jetstream.JetStream
+	kv             jetstream.KeyValue
 }
 
 type HadesConsumer struct {
 	natsConnection *nats.Conn
 	concurrency    uint
 	consumers      map[Priority]jetstream.Consumer
+	kv             jetstream.KeyValue
 }
 
 // SetupNatsConnection creates a connection to NATS server
@@ -83,9 +86,18 @@ func NewHadesProducer(nc *nats.Conn) (*HadesProducer, error) {
 	}
 	slog.Info("Created JetStream stream", "stream", s)
 
+	kv, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: "HADES_JOBS",
+	})
+	if err != nil {
+		slog.Error("Failed to create JetStream KeyValue store", "error", err)
+		return nil, err
+	}
+
 	return &HadesProducer{
 		natsConnection: nc,
 		js:             js,
+		kv:             kv,
 	}, nil
 }
 
@@ -116,10 +128,19 @@ func NewHadesConsumer(nc *nats.Conn, concurrency uint) (*HadesConsumer, error) {
 	}
 
 	slog.Info("Created JetStream consumer", "consumers", consumers)
+
+	kv, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: "HADES_JOBS",
+	})
+	if err != nil {
+		slog.Error("Failed to create JetStream KeyValue store", "error", err)
+		return nil, err
+	}
 	return &HadesConsumer{
 		natsConnection: nc,
 		consumers:      consumers,
 		concurrency:    concurrency,
+		kv:             kv,
 	}, nil
 }
 
@@ -140,7 +161,9 @@ func (hp HadesProducer) EnqueueJobWithPriority(ctx context.Context, queuePayloud
 	if err != nil {
 		slog.Error("Failed to marshal payload", "error", err)
 	}
-	_, err = hp.js.PublishAsync(PrioritySubject(priority), bytesPayload, jetstream.WithMsgID(queuePayloud.ID.String()))
+	_, err = hp.js.PublishAsync(PrioritySubject(priority), queuePayloud.ID[:], jetstream.WithMsgID(queuePayloud.ID.String()))
+
+	hp.kv.Put(ctx, queuePayloud.ID.String(), bytesPayload)
 	return err
 }
 
@@ -205,9 +228,23 @@ func (hc HadesConsumer) DequeueJob(ctx context.Context, processing func(payload 
 					}
 					slog.Debug("Found message", "subject", msg.Subject, "priority", priority)
 
+					// Get the UUID from the ticket
+					msg_id, err := uuid.FromBytes(msg.Data())
+					if err != nil {
+						slog.Error("Failed to parse message ID", "error", err, "data", string(msg.Data()))
+						msg.Nak() // Negative acknowledgment, message will be redelivered
+						return
+					}
+
+					entry, err := hc.kv.Get(ctx, msg_id.String())
+					if err != nil {
+						slog.Error("Failed to get message from KeyValue store", "error", err, "id", msg_id.String())
+						msg.Nak() // Negative acknowledgment, message will be redelivered
+						return
+					}
 					// Process the message
 					var job payload.QueuePayload
-					if err := json.Unmarshal(msg.Data(), &job); err != nil {
+					if err := json.Unmarshal(entry.Value(), &job); err != nil {
 						slog.Error("Failed to unmarshal message payload", "error", err, "data", string(msg.Data()))
 						msg.Nak() // Negative acknowledgment, message will be redelivered
 						return
